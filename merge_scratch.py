@@ -1,12 +1,15 @@
 import os
 import json
 import zipfile
+import tkinter as tk
+from tkinter import filedialog
+from tkinter import messagebox
 
 
 def extract_project_json(sb3_file, extract_to):
     with zipfile.ZipFile(sb3_file, "r") as zip_ref:
         zip_ref.extract("project.json", extract_to)
-        # 解壓縮其他文件（除了 project.json）
+        # Extract other files (excluding project.json)
         for file in zip_ref.namelist():
             if file != "project.json":
                 zip_ref.extract(file, extract_to)
@@ -14,16 +17,18 @@ def extract_project_json(sb3_file, extract_to):
 
 def merge_json_files(input_folder, output_file):
     if not os.path.exists(input_folder):
-        print(f"指定的資料夾路徑 '{input_folder}' 不存在。請檢查路徑是否正確。")
+        print(
+            f"The specified folder path '{input_folder}' does not exist. Please check the path."
+        )
         exit(1)
 
     merged_data = None
-    temp_folder = "./temp_json"
+    temp_folder = os.path.join(input_folder, "temp_json")
 
     if not os.path.exists(temp_folder):
         os.makedirs(temp_folder)
 
-    # 遍歷資料夾內所有文件
+    # Iterate through all files in the folder
     for filename in os.listdir(input_folder):
         if filename.endswith(".sb3"):
             sb3_file_path = os.path.join(input_folder, filename)
@@ -33,22 +38,39 @@ def merge_json_files(input_folder, output_file):
                 with open(json_file_path, "r", encoding="utf-8") as json_file:
                     data = json.load(json_file)
             except (json.JSONDecodeError, UnicodeDecodeError, zipfile.BadZipFile) as e:
-                print(f"文件 {filename} 不是有效的 sb3 文件或無法解壓，跳過。錯誤：{e}")
+                print(
+                    f"File {filename} is not a valid sb3 file or could not be extracted, skipping. Error: {e}"
+                )
                 continue
 
-            # 確保 JSON 文件符合 Scratch 的 sb3 格式
+            # Ensure JSON file conforms to Scratch's sb3 format
             if "targets" not in data:
-                print(f"文件 {filename} 缺少 'targets' 部分，無法合併。")
+                print(f"File {filename} is missing 'targets' section, cannot merge.")
                 continue
 
-            # 初始化 merged_data 為第一個項目，或者合併角色/背景
+            # Initialize merged_data with the first project or merge variables and targets
             if merged_data is None:
                 merged_data = data
             else:
-                # 合併角色（targets）
+                # Merge variables
+                for key, value in data.get("variables", {}).items():
+                    if key not in merged_data["variables"]:
+                        merged_data["variables"][key] = value
+
+                # Merge lists
+                for key, value in data.get("lists", {}).items():
+                    if key not in merged_data["lists"]:
+                        merged_data["lists"][key] = value
+
+                # Merge broadcasts
+                for key, value in data.get("broadcasts", {}).items():
+                    if key not in merged_data["broadcasts"]:
+                        merged_data["broadcasts"][key] = value
+
+                # Merge targets (sprites and stage)
                 for target in data["targets"]:
                     if not target["isStage"]:
-                        # 查找是否已有重複角色名稱，如果有則覆蓋
+                        # Check if a sprite with the same name already exists, if so, replace it
                         existing_target = next(
                             (
                                 t
@@ -60,18 +82,18 @@ def merge_json_files(input_folder, output_file):
                         if existing_target:
                             merged_data["targets"].remove(existing_target)
                         merged_data["targets"].append(target)
-                        break
 
-    # 將合併後的數據寫入新的 JSON 文件
+    # Write merged data to new JSON file
     if merged_data is not None:
         with open(output_file, "w", encoding="utf-8") as output_json_file:
             json.dump(merged_data, output_json_file, indent=4, ensure_ascii=False)
 
-    # 壓縮成新的 sb3 文件
-    with zipfile.ZipFile("all_merage.sb3", "w") as new_sb3:
-        # 添加合併後的 project.json
+    # Compress into new sb3 file
+    new_sb3_path = os.path.join(input_folder, "all_merge.sb3")
+    with zipfile.ZipFile(new_sb3_path, "w") as new_sb3:
+        # Add merged project.json
         new_sb3.write(output_file, "project.json")
-        # 添加其他資源文件
+        # Add other resource files
         for root, _, files in os.walk(temp_folder):
             for file in files:
                 if file != "project.json":
@@ -79,20 +101,59 @@ def merge_json_files(input_folder, output_file):
                     arcname = os.path.relpath(file_path, temp_folder)
                     new_sb3.write(file_path, arcname)
 
-    # 清理暫存資料夾
+    # Clean up temp folder
     if os.path.exists(temp_folder):
         for temp_file in os.listdir(temp_folder):
             os.remove(os.path.join(temp_folder, temp_file))
         os.rmdir(temp_folder)
 
 
-if __name__ == "__main__":
-    input_folder = os.getcwd()  # 使用當前所在位置的資料夾
-    output_file = "project.json"  # 合併後輸出的 JSON 文件名
-    merge_json_files(input_folder, output_file)
-    print(f"所有 sb3 文件已合併至 all_merage.sb3")
+def select_folder(entry):
+    folder_selected = filedialog.askdirectory()
+    if folder_selected:
+        entry.delete(0, tk.END)
+        entry.insert(0, folder_selected)
+    return folder_selected
 
-# 注意事項：
-# 1. JSON 文件格式：程式會檢查每個解壓出的 JSON 文件是否包含 'targets' 部分，以確保符合 Scratch 的 sb3 JSON 格式。
-# 2. 重複角色：如果角色名稱重複，則會覆蓋之前的角色，保留最新的角色。
-# 3. 報錯處理：如果某些 sb3 文件無法解壓或解析錯誤，程式會輸出錯誤訊息，但不會中斷整個合併過程。
+
+def start_merge(entry):
+    input_folder = entry.get()
+    if not input_folder:
+        messagebox.showerror("Error", "Please select a folder containing .sb3 files.")
+        return
+
+    output_file = os.path.join(input_folder, "project.json")
+    merge_json_files(input_folder, output_file)
+    messagebox.showinfo(
+        "Success",
+        "All sb3 files have been merged into all_merge.sb3 in the selected folder.",
+    )
+
+
+def main():
+    # GUI setup
+    root = tk.Tk()
+    root.title("SB3 Merger")
+    root.geometry("400x200")
+
+    input_folder_label = tk.Label(root, text="Select Folder with SB3 Files:")
+    input_folder_label.pack(pady=10)
+
+    input_folder_entry = tk.Entry(root, width=50)
+    input_folder_entry.pack(pady=5)
+
+    select_folder_button = tk.Button(
+        root, text="選擇資料夾", command=lambda: select_folder(input_folder_entry)
+    )
+    select_folder_button.pack(pady=5)
+
+    start_merge_button = tk.Button(
+        root, text="開始合併", command=lambda: start_merge(input_folder_entry)
+    )
+    start_merge_button.pack(pady=20)
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
